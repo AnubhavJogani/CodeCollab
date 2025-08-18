@@ -2,21 +2,37 @@ import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import { ToastContainer, toast } from 'react-toastify'
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { MonacoBinding } from "y-monaco";
 
+const colors = [
+  "#f87171", // red-400
+  "#60a5fa", // blue-400
+  "#34d399", // green-400
+  "#fbbf24", // yellow-400
+  "#a78bfa", // purple-400
+  "#fb7185", // pink-400
+  "#38bdf8", // cyan-400
+];
+
 const Room = () => {
   const { roomId } = useParams();
   const [inputMessage, setInputMessage] = useState("");
-  const [messages, setMessages] = useState([{ user: "system", text: "Welcome to the room 🚀"}]);
+  const [messages, setMessages] = useState([{ user: "system", text: "Welcome to the room 🚀" }]);
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
+  const location = useLocation();
   const providerRef = useRef(null);
   const ydocRef = useRef(null);
   const bindingRef = useRef(null);
   const yMessagesRef = useRef(null);
+  const displayName = location.state?.displayName || "Anonymous";
+
+  function getRandomColor() {
+    return colors[Math.floor(Math.random() * colors.length)];
+  }
 
   const handleEditorMount = (editor, monaco) => {
     // 1. Create a Yjs document
@@ -26,6 +42,12 @@ const Room = () => {
     // Save for cleanup
     providerRef.current = provider;
     ydocRef.current = ydoc;
+
+    provider.awareness.setLocalStateField("user", {
+      name: displayName,
+      color: getRandomColor(),
+    });
+
     // 3. Get a shared type
     const yText = ydoc.getText("monaco");
     // 4. Bind with Monaco editor
@@ -49,8 +71,7 @@ const Room = () => {
 
     provider.awareness.on("update", () => {
       const states = Array.from(provider.awareness.getStates().values());
-      console.log("Users online:", states);
-      setUsers(states)
+      setUsers(states);
     });
   };
 
@@ -79,10 +100,14 @@ const Room = () => {
 
   const handleSendMessage = () => {
     if (!inputMessage.trim()) return;
-    yMessagesRef.current?.push([{ user: "Me", text: inputMessage }]);
+    const currentUser = providerRef.current?.awareness.getLocalState()?.user;
+    yMessagesRef.current?.push([{
+      user: currentUser?.name || "Anonymous",
+      color: currentUser?.color || "white",
+      text: inputMessage
+    }]);
     setInputMessage("");
-  }
-
+  };
   const handleRunCode = () => {
     toast.info("Code execution not implemented yet")
   }
@@ -90,7 +115,7 @@ const Room = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-black text-white">
-    <ToastContainer />
+      <ToastContainer />
       {/* Navbar */}
       <div className="h-12 flex items-center justify-between border-b border-green-500 px-4">
         <div className="font-bold text-green-400">CodeCollab</div>
@@ -108,19 +133,16 @@ const Room = () => {
       {/* Main Content */}
       <div className="flex flex-1">
         {/* Left Sidebar */}
-        {/* <div className="w-48 border-r border-green-500 p-2">
-          <h2 className="text-green-400 font-semibold mb-2">Files</h2>
-          <ul className="text-gray-300 text-sm space-y-1">
-            <li className="cursor-pointer hover:text-green-400">index.js</li>
-            <li className="cursor-pointer hover:text-green-400">utils.js</li>
+        <div className="w-48 border-r border-green-500 p-2">
+          <h2 className="text-green-400 font-semibold mb-2">Online Users</h2>
+          <ul className="text-sm text-gray-300">
+            {users.map((u, i) => (
+              <li key={i} style={{ color: u.user?.color || "white" }}>
+                {u.user?.name || `User ${i + 1}`}
+              </li>
+            ))}
           </ul>
-        </div> */}
-        <h2 className="text-green-400 font-semibold mb-2">Online Users</h2>
-        <ul className="text-sm text-gray-300">
-          {users.map((u, i) => (
-            <li key={i}>User {i + 1}</li>
-          ))}
-        </ul>
+        </div>
 
         {/* Editor */}
         <div className="flex-1">
@@ -137,11 +159,7 @@ const Room = () => {
           <h2 className="text-green-400 font-semibold mb-2">Chat</h2>
           <div id="chat-box" className="flex-1 bg-gray-900 rounded p-2 overflow-y-auto max-h-[450px]">
             {messages.map((data, i) => (
-              <p
-                key={i}
-                className={`text-sm ${data.user === "Me" ? "text-green-400" : "text-gray-300"
-                  }`}
-              >
+              <p key={i} className="text-sm" style={{ color: data.color || "white" }}>
                 {data.user}: {data.text}
               </p>
             ))}
