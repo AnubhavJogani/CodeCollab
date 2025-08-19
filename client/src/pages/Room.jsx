@@ -28,6 +28,7 @@ const Room = () => {
   const ydocRef = useRef(null);
   const bindingRef = useRef(null);
   const yMessagesRef = useRef(null);
+  const decorationsRef = useRef([]);
   const displayName = location.state?.displayName || "Anonymous";
 
   function getRandomColor() {
@@ -35,43 +36,99 @@ const Room = () => {
   }
 
   const handleEditorMount = (editor, monaco) => {
-    // 1. Create a Yjs document
+    // 1) Yjs doc + provider
     const ydoc = new Y.Doc();
-    // 2. Connect to websocket provider (backend)
     const provider = new WebsocketProvider("ws://localhost:1234", roomId, ydoc);
-    // Save for cleanup
     providerRef.current = provider;
     ydocRef.current = ydoc;
 
+    const localColor = getRandomColor();
     provider.awareness.setLocalStateField("user", {
       name: displayName,
-      color: getRandomColor(),
+      color: localColor,
     });
 
-    // 3. Get a shared type
+    // 2) Shared text + Monaco binding
     const yText = ydoc.getText("monaco");
-    // 4. Bind with Monaco editor
     const binding = new MonacoBinding(
       yText,
       editor.getModel(),
       new Set([editor]),
       provider.awareness
     );
-
     bindingRef.current = binding;
 
-    // Shared messages array
+    // 3) Shared messages
     const yMessages = ydoc.getArray("messages");
     yMessagesRef.current = yMessages;
+    yMessages.observe(() => setMessages(yMessages.toArray()));
 
-    // Observe changes
-    yMessages.observe(() => {
-      setMessages(yMessages.toArray());
-    });
+    // 4) Broadcast local selection/caret to awareness (also once on mount)
+    const publishSelection = () => {
+      const sel = editor.getSelection();
+      if (!sel) return;
+      provider.awareness.setLocalStateField("cursor", {
+        startLineNumber: sel.startLineNumber,
+        startColumn: sel.startColumn,
+        endLineNumber: sel.endLineNumber,
+        endColumn: sel.endColumn,
+      });
+    };
+    publishSelection(); // send initial caret once
+    editor.onDidChangeCursorSelection(publishSelection);
+
+    // 5) Render remote cursors/selections
+    const renderCursors = (states) => {
+      const me = providerRef.current?.awareness.getLocalState()?.user;
+      const next = [];
+
+      states.forEach((s) => {
+        if (!s?.user || s.user?.name === me?.name) return;
+        if (!s?.cursor) return;
+
+        const { startLineNumber, startColumn, endLineNumber, endColumn } = s.cursor;
+        const userColor = s.user.color || "#22c55e"; // fallback green
+
+        // Highlight selection
+        const hasRange =
+          startLineNumber !== endLineNumber || startColumn !== endColumn;
+        if (hasRange) {
+          next.push({
+            range: new monaco.Range(
+              startLineNumber,
+              startColumn,
+              endLineNumber,
+              endColumn
+            ),
+            options: {
+              inlineClassName: `remote-selection-highlight-${s.user.name}`,
+            },
+          });
+        }
+        next.push({
+          range: new monaco.Range(endLineNumber, endColumn, endLineNumber, endColumn),
+          options: {
+            className: `remote-caret-${s.user.name}`,
+            after: {
+              contentText: ` ${s.user.name} `,
+              inlineClassName: `remote-cursor-label-${s.user.name}`,
+            },
+          },
+        });
+
+        injectUserStyles(s.user.name, userColor);
+      });
+
+      decorationsRef.current = editor.deltaDecorations(
+        decorationsRef.current,
+        next
+      );
+    };
 
     provider.awareness.on("update", () => {
       const states = Array.from(provider.awareness.getStates().values());
       setUsers(states);
+      renderCursors(states);
     });
   };
 
@@ -89,6 +146,35 @@ const Room = () => {
       chatBox.scrollTop = chatBox.scrollHeight;
     }
   }, [messages]);
+
+  function injectUserStyles(username, color) {
+    const styleId = `cursor-style-${username}`;
+    if (document.getElementById(styleId)) return;
+
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.innerHTML = `
+    .monaco-editor .remote-caret-${username} {
+      border-left: 3px solid ${color};  /* thicker caret */
+      margin-left: -1px;
+    }
+    .monaco-editor .remote-cursor-label-${username} {
+      background: ${color};
+      color: black;
+      font-size: 11px;
+      padding: 2px 5px;
+      border-radius: 4px;
+      margin-left: 2px;
+      font-weight: 500;
+    }
+    .monaco-editor .remote-selection-highlight-${username} {
+      background-color: ${color}40; /* same color, 25% opacity */
+      border-radius: 2px;
+    }
+  `;
+    document.head.appendChild(style);
+  }
+
 
   const handleCopyRoomLink = () => {
     navigator.clipboard.writeText(window.location.href);
